@@ -19,10 +19,11 @@ def import_data(filename):
     
     
     datas = loadmat(filename)
-    
-    position   = datas['sdDIFF_FR_C'][0][0][2]
-    time  = datas['sdDIFF_FR_C'][0][0][0]
-    functional   = datas['sdDIFF_FR_C'][0][0][5][0][0][1]
+    dict_key = list(datas.keys())[-1]
+    print(dict_key)
+    position   = datas[dict_key][0][0][2]
+    time  = datas[dict_key][0][0][0]
+    functional   = datas[dict_key][0][0][5][0][0][1]
 
     return position,time[0],functional
 
@@ -58,7 +59,7 @@ def plot_2D_crosscuts(bm_data,coord,fdir):
         ax[i].set_xticks([])
         ax[i].set_yticks([])
         
-    plt.savefig(fdir + '2Dcrosscut.png',fmt = 'png', dpi = 300)
+    plt.savefig(out_dir + '2Dcrosscut.png',fmt = 'png', dpi = 300)
     plt.close('all')
     
     return
@@ -71,7 +72,7 @@ def plot_sources_on_brain(loc_volume,bm,bm_data):
                           
     return
 
-def generate_nifti(loc_volume,av_win,bm,smooth_f,fdir):
+def generate_nifti_4D(loc_volume,av_win,bm,smooth_f,fdir):
 
     fun_data = np.zeros((bm.shape[0],bm.shape[1],bm.shape[2],t_size))
     for iv,(xv,yv,zv) in enumerate(loc_volume):
@@ -92,8 +93,31 @@ def generate_nifti(loc_volume,av_win,bm,smooth_f,fdir):
     nib.save(fun_img, fout)
 
     return fun_img
+
+def generate_nifti_windows(fun,loc_volume,av_win,bm,smooth_f,fdir):
+    
+    fun_img = {}
+    for e in ERPs:
+            
+        fun_data = np.zeros((bm.shape[0],bm.shape[1],bm.shape[2]))
+        for iv,(xv,yv,zv) in enumerate(loc_volume):
+            # Put the time average of the functional data over a time window av_win long
+            fun_data[xv,yv,zv] = np.average(fun[iv,ERPs[e][0][0]:ERPs[e][0][1]])
+
+        fun_img[e] = nib.Nifti2Image(fun_data,affine = bm.affine)
+
+        # Apply smoothing
+        fun_img[e] = smooth_img(fun_img[e],smooth_f)
+        # Apply bm mask
+        fun_img[e] = unmask(apply_mask(fun_img[e],bm),bm)
     
     
+        fout = out_dir + '{}_S{:02d}.nii.gz'.format(e,smooth_f)
+        print('Nifti saved in {}'.format(fout))
+    
+        nib.save(fun_img[e], fout)
+
+    return fun_img
     
     
 if __name__ == '__main__':
@@ -106,20 +130,40 @@ if __name__ == '__main__':
                         help='The size of the window for temporal averaging (in eeg timepoints, must be a power of 2)')
     parser.add_argument('-S', action='store', dest='smooth_f', default = 5,
                         help='The FWHM (in mm) for the spatial smoothing to be applied to the reconstructed signal')
+    parser.add_argument('-E', action='store', dest='use_erp', default = False,
+                        help='Whether to export average maps calculated at ERPs timings')
+
     results = parser.parse_args()
     fname = results.filename
     smooth_f = results.smooth_f
     av_win = results.av_win
+    use_erp = results.use_erp
     if np.log2(av_win)%1!=0:
         print('You did not input a power of 2 for the temporal averaging window')
         av_win = int(2**np.round(np.log2(av_win)))
         print('Average window approximated to the nearest power of 2: av_win = {}'.format(av_win))
     ######################################
-    fdir = os.path.split(fname)[0] + '/'
+    fdir,foutroot = os.path.split(fname)
+    fdir = fdir + '/'
+    foutroot = foutroot.replace('.mat','')
+    out_dir = fdir + foutroot + '/'
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir)    
 
+    # Elaborate the ERP time windows
+    ERPs = {
+        'N1'  : [[1232,1301],[0.101 ,0.1348]],
+        'P2'  : [[1353,1499],[0.160 ,0.2314]],
+        'N2'  : [[1517,1721],[0.2402,0.3394]],
+        'P3'  : [[1722,1927],[0.3403,0.4404]],
+        'eLPP': [[1928,2356],[0.4409,0.6499]],
+        'lLPP': [[2357,2868],[0.6504,0.8999]]
+        }
+
+    
     # Import the eeg data
     pos,time,fun = import_data(fname)
-
+    
 
     # Import the mni template
     bm = load_mni152_brain_mask()
@@ -155,7 +199,8 @@ if __name__ == '__main__':
     print('The software is currently averaging the time traces over a time window of {} s'.format(dt))
     print('This will result in a nifti file with {} volumes.'.format(t_size))
 
-    
+    print(fun.shape)
     # Generate the nifti(s)
-    fun_img = generate_nifti(loc_volume,av_win,bm,smooth_f,fdir)
+    if use_erp:
+        fun_img = generate_nifti_windows(fun,loc_volume,ERPs,bm,smooth_f,fdir)
         
